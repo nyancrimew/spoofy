@@ -18,7 +18,7 @@ pub struct Player {
     index: HashMap<String, usize>,
     playing_from_timestamp: u64,
     playing_from_instant: Instant,
-    current_track: usize,
+    current_track: isize,
     total_tracks: usize,
 }
 
@@ -70,7 +70,7 @@ impl Player {
     }
 
     pub fn current_metadata(&self) -> Metadata {
-        self.queue[self.current_track].to_owned()
+        self.queue[self.current_track as usize].to_owned()
     }
 
     pub fn get_playing(&self) -> bool {
@@ -125,11 +125,11 @@ impl Player {
     }
 
     // TODO: use list operations instead (pop/push)
-    pub fn set_track(&mut self, track: usize) {
-        if track >= self.total_tracks {
+    pub fn set_track(&mut self, track: isize) {
+        if track >= self.total_tracks as isize {
             self.current_track = 0
         } else if track <= 0 {
-            self.current_track = self.total_tracks - 1
+            self.current_track = self.total_tracks as isize - 1
         } else {
             self.current_track = track
         }

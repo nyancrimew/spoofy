@@ -10,6 +10,7 @@ mod player;
 use crate::metadata::Metadata;
 use crate::player::Player;
 
+// TODO: figure out a way to emit property changes
 fn main() -> Result<(), Box<dyn Error>> {
     let c = Connection::new_session()?;
     c.request_name("org.mpris.MediaPlayer2.spotify", false, true, false)?;
