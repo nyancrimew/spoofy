@@ -1,31 +1,14 @@
-use dbus::{
-    blocking::Connection,
-    Path,
-};
+#[macro_use]
+extern crate chan;
+
+use dbus::{blocking::Connection, Path};
 use dbus_crossroads::{Context, Crossroads, IfaceBuilder};
 use std::{error::Error, vec};
 
 mod metadata;
+mod player;
 use crate::metadata::Metadata;
-
-struct Player {
-    position: i64,
-    shuffle: bool,
-    rate: f64,
-    volume: f64,
-    loop_status: String,
-    playing: bool,
-    metadata: Metadata,
-}
-
-impl Player {
-    fn playback_status(&self) -> String {
-        if self.playing {
-            return "Playing".to_string();
-        }
-        return "Paused".to_string();
-    }
-}
+use crate::player::Player;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let c = Connection::new_session()?;
@@ -82,7 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 });
 
             b.property("Metadata")
-                .get(|_, player| Ok(player.metadata.to_map()));
+                .get(|_, player| Ok(player.current_metadata().to_map()));
 
             b.property("MaximumRate").get(|_, _| Ok(1.0));
 
@@ -102,7 +85,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Ok(Some(value))
                 });
 
-            b.property("Position").get(|_, player| Ok(player.position));
+            b.property("Position")
+                .get(|_, player| Ok(player.get_position()));
 
             b.property("LoopStatus")
                 .get(|_, player| Ok(player.loop_status.clone()))
@@ -114,7 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             b.property("PlaybackStatus")
                 .get(|_, player| Ok(player.playback_status()));
 
-            let seeked = b.signal::<(i64,), _>("Seeked", ("sender",)).msg_fn();
+            let seeked = b.signal::<(u64,), _>("Seeked", ("sender",)).msg_fn();
 
             b.method(
                 "Seek",
@@ -122,18 +106,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                 (),
                 move |ctx: &mut Context, player: &mut Player, (offset,): (i64,)| {
                     // Seeek by offset
-                    player.position += offset;
-                    println!("Seeking by {} (new position: {})", offset, player.position);
+                    player.seek(offset);
+                    println!(
+                        "Seeking by {} (new position: {})",
+                        offset,
+                        player.get_position()
+                    );
 
                     // send signal to let peers know we seeked
-                    let signal_msg = seeked(ctx.path(), &(player.position,));
+                    let signal_msg = seeked(ctx.path(), &(player.get_position(),));
                     ctx.push_msg(signal_msg);
 
                     Ok(())
                 },
             );
 
-            b.method("Next", (), (), move |_, _, (): ()| Ok(()));
+            b.method("Next", (), (), move |_, player, (): ()| {
+                player.next();
+                Ok(())
+            });
 
             b.method("OpenUri", ("Uri",), (), move |_, _, (uri,): (String,)| {
                 println!("open_uri: {}", uri);
@@ -141,29 +132,33 @@ fn main() -> Result<(), Box<dyn Error>> {
             });
 
             b.method("Pause", (), (), move |_, player, (): ()| {
-                player.playing = false;
+                player.set_playing(false);
                 Ok(())
             });
 
             b.method("Play", (), (), move |_, player, (): ()| {
-                player.playing = true;
+                player.set_playing(true);
                 Ok(())
             });
 
             b.method("PlayPause", (), (), move |_, player, (): ()| {
-                player.playing = !player.playing;
+                player.play_pause();
                 Ok(())
             });
 
-            b.method("Previous", (), (), move |_, _, (): ()| Ok(()));
+            b.method("Previous", (), (), move |_, player, (): ()| {
+                player.previous();
+                Ok(())
+            });
 
             b.method(
                 "SetPosition",
                 ("TrackId", "Position"),
                 (),
-                move |_, player: &mut Player, (_track_id, position): (Path, i64)| {
+                move |_, player: &mut Player, (_track_id, position): (Path, u64)| {
+                    // TODO: switch track based on ID
                     // Seeek by offset
-                    player.position = position;
+                    player.set_position(position);
                     println!("Setting poistion to {}", position);
 
                     // send signal to let peers know we seeked
@@ -178,32 +173,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     );
 
-    let metadata = Metadata {
-        trackid: "spotify:track:0Szxm4RHk2fztgpW4jHh02".to_string(),
-        length: 144040000,
-        art_url: "https://i.scdn.co/image/ab67616d0000b2739e1cc9cb60157c36a4f1d341".to_string(),
-        album: "Fractured Life".to_string(),
-        album_artist: vec!["Air Traffic".to_string()],
-        artist: vec!["Air Traffic".to_string()],
-        auto_rating: 0.36,
-        disc_number: 1,
-        title: "Charlotte".to_string(),
-        track_number: 2,
-        url: "https://open.spotify.com/track/0Szxm4RHk2fztgpW4jHh02".to_string(),
-    };
+    let queue = &[
+        Metadata {
+            trackid: "spotify:track:dabdabdabdabdabdab".to_string(),
+            length: 2000,
+            art_url: "https://i.scdn.co/image/ab67616d0000b2739e1cc9cb60157c36a4f1d341".to_string(),
+            album: r#"<script>alert("album")</script>"#.to_string(),
+            album_artist: vec![r#"<script>alert("album artist")</script>"#.to_string()],
+            artist: vec![r#"<script>alert("artist")</script>"#.to_string()],
+            auto_rating: 0.40,
+            disc_number: 2,
+            title: r#"<script>alert("title")</script>"#.to_string(),
+            track_number: 3,
+            url: "https://open.spotify.com/track/dabdabdabdabdabdab".to_string(),
+        },
+        Metadata {
+            trackid: "spotify:track:0Szxm4RHk2fztgpW4jHh02".to_string(),
+            length: 144040000,
+            art_url: "https://i.scdn.co/image/ab67616d0000b2739e1cc9cb60157c36a4f1d341".to_string(),
+            album: "Fractured Life".to_string(),
+            album_artist: vec!["Air Traffic".to_string()],
+            artist: vec!["Air Traffic".to_string()],
+            auto_rating: 0.36,
+            disc_number: 1,
+            title: "Charlotte".to_string(),
+            track_number: 2,
+            url: "https://open.spotify.com/track/0Szxm4RHk2fztgpW4jHh02".to_string(),
+        },
+    ];
 
     cr.insert(
         "/org/mpris/MediaPlayer2",
         &[media_player_token, player_token],
-        Player {
-            position: 0,
-            shuffle: false,
-            rate: 1.0,
-            volume: 1.0,
-            playing: true,
-            loop_status: "None".to_string(),
-            metadata: metadata,
-        },
+        Player::new(queue),
     );
 
     cr.serve(&c)?;
